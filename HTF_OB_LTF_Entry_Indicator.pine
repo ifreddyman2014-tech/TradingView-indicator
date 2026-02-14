@@ -388,42 +388,24 @@ if sell_signal
 
 // HTF OB Boxes
 if show_htf_ob and htf_bull_ob_active and not na(htf_bull_ob_top)
-    box.new(htf_bull_ob_bar, htf_bull_ob_top, bar_index + 50, htf_bull_ob_bottom,
-            border_color=color.new(color.green, 50), bgcolor=color.new(color.green, 90),
-            border_width=1, extend=extend.right, text="M30 Bull OB",
-            text_color=color.green, text_size=size.small)
+    box.new(htf_bull_ob_bar, htf_bull_ob_top, bar_index + 50, htf_bull_ob_bottom, border_color=color.new(color.green, 50), bgcolor=color.new(color.green, 90), border_width=1, extend=extend.right, text="M30 Bull OB", text_color=color.green, text_size=size.small)
 
 if show_htf_ob and htf_bear_ob_active and not na(htf_bear_ob_top)
-    box.new(htf_bear_ob_bar, htf_bear_ob_top, bar_index + 50, htf_bear_ob_bottom,
-            border_color=color.new(color.red, 50), bgcolor=color.new(color.red, 90),
-            border_width=1, extend=extend.right, text="M30 Bear OB",
-            text_color=color.red, text_size=size.small)
+    box.new(htf_bear_ob_bar, htf_bear_ob_top, bar_index + 50, htf_bear_ob_bottom, border_color=color.new(color.red, 50), bgcolor=color.new(color.red, 90), border_width=1, extend=extend.right, text="M30 Bear OB", text_color=color.red, text_size=size.small)
 
 // LTF OB Boxes
 if show_ltf_ob and ltf_bull_ob_valid and not na(ltf_bull_ob_top)
-    box.new(ltf_bull_ob_bar, ltf_bull_ob_top, bar_index + 20, ltf_bull_ob_bottom,
-            border_color=color.new(color.blue, 30), bgcolor=color.new(color.blue, 85),
-            border_width=1, extend=extend.right, text="LTF Bull OB",
-            text_color=color.blue, text_size=size.tiny)
+    box.new(ltf_bull_ob_bar, ltf_bull_ob_top, bar_index + 20, ltf_bull_ob_bottom, border_color=color.new(color.blue, 30), bgcolor=color.new(color.blue, 85), border_width=1, extend=extend.right, text="LTF Bull OB", text_color=color.blue, text_size=size.tiny)
 
 if show_ltf_ob and ltf_bear_ob_valid and not na(ltf_bear_ob_top)
-    box.new(ltf_bear_ob_bar, ltf_bear_ob_top, bar_index + 20, ltf_bear_ob_bottom,
-            border_color=color.new(color.orange, 30), bgcolor=color.new(color.orange, 85),
-            border_width=1, extend=extend.right, text="LTF Bear OB",
-            text_color=color.orange, text_size=size.tiny)
+    box.new(ltf_bear_ob_bar, ltf_bear_ob_top, bar_index + 20, ltf_bear_ob_bottom, border_color=color.new(color.orange, 30), bgcolor=color.new(color.orange, 85), border_width=1, extend=extend.right, text="LTF Bear OB", text_color=color.orange, text_size=size.tiny)
 
 // FVG Boxes
 if show_fvg and bull_fvg_valid and not na(active_bull_fvg_top)
-    box.new(active_bull_fvg_bar, active_bull_fvg_top, bar_index + 15, active_bull_fvg_bottom,
-            border_color=color.new(color.aqua, 40), bgcolor=color.new(color.aqua, 88),
-            border_width=1, extend=extend.right, text="FVG",
-            text_color=color.aqua, text_size=size.tiny)
+    box.new(active_bull_fvg_bar, active_bull_fvg_top, bar_index + 15, active_bull_fvg_bottom, border_color=color.new(color.aqua, 40), bgcolor=color.new(color.aqua, 88), border_width=1, extend=extend.right, text="FVG", text_color=color.aqua, text_size=size.tiny)
 
 if show_fvg and bear_fvg_valid and not na(active_bear_fvg_top)
-    box.new(active_bear_fvg_bar, active_bear_fvg_top, bar_index + 15, active_bear_fvg_bottom,
-            border_color=color.new(color.fuchsia, 40), bgcolor=color.new(color.fuchsia, 88),
-            border_width=1, extend=extend.right, text="FVG",
-            text_color=color.fuchsia, text_size=size.tiny)
+    box.new(active_bear_fvg_bar, active_bear_fvg_top, bar_index + 15, active_bear_fvg_bottom, border_color=color.new(color.fuchsia, 40), bgcolor=color.new(color.fuchsia, 88), border_width=1, extend=extend.right, text="FVG", text_color=color.fuchsia, text_size=size.tiny)
 
 // Labels
 if show_labels
