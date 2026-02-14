@@ -23,12 +23,17 @@ disp_atr_mult = input.float(1.5, "Displacement ATR Multiplier", minval=1.0, step
 disp_atr_length = input.int(14, "ATR Length", minval=5, group="Displacement")
 disp_close_threshold = input.float(0.6, "Close Position Threshold", minval=0.5, maxval=1.0, step=0.05, group="Displacement")
 
-// BOS Settings
+// BOS Settings (Strict BOS)
 bos_buffer_pips = input.float(2.0, "BOS Buffer (pips)", minval=0, step=0.5, group="BOS Settings")
+bos_atr_mult = input.float(0.5, "BOS ATR Multiplier", minval=0, step=0.1, group="BOS Settings")
+bos_close_pos = input.float(0.6, "BOS Close Position Threshold", minval=0.5, maxval=1.0, step=0.05, group="BOS Settings", tooltip="Candle must close in top/bottom X% of body")
 
 // Entry Settings
 use_ltf_ob = input.bool(true, "Use LTF OB Entry", group="Entry Logic")
 use_fvg = input.bool(true, "Use FVG Entry", group="Entry Logic")
+require_sweep = input.bool(true, "Require Liquidity Sweep", group="Entry Logic", tooltip="Require sweep of swing low/high before BUY/SELL signal")
+sweep_buffer_pips = input.float(1.0, "Sweep Buffer (pips)", minval=0, step=0.5, group="Entry Logic")
+setup_timeout_bars = input.int(30, "Setup Timeout (bars)", minval=5, maxval=100, group="Entry Logic", tooltip="Invalidate setup if no signal within N bars")
 
 // SL/TP Settings
 sl_method = input.string("Swing", "SL Method", options=["Swing", "OB"], group="Risk Management")
@@ -124,8 +129,8 @@ f_is_strong_close(is_bullish) =>
 // HTF ORDER BLOCK DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// HTF Data via request.security
-[htf_high, htf_low, htf_close, htf_open] = request.security(syminfo.tickerid, htf_timeframe, [high, low, close, open], lookahead=barmerge.lookahead_on)
+// HTF Data via request.security (NO REPAINT)
+[htf_high, htf_low, htf_close, htf_open] = request.security(syminfo.tickerid, htf_timeframe, [high, low, close, open], lookahead=barmerge.lookahead_off)
 
 // HTF Pivot Points (Note: pivots can repaint, using confirmed pivots)
 htf_pivot_high = ta.pivothigh(htf_high, htf_pivot_length, htf_pivot_length)
@@ -155,6 +160,18 @@ var float htf_bear_ob_bottom = na
 var int htf_bear_ob_bar = na
 var bool htf_bear_ob_active = false
 
+// Box IDs for persistent boxes (create once, update)
+var box htf_bull_ob_box = na
+var box htf_bear_ob_box = na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE MACHINE (one signal per setup)
+// ═══════════════════════════════════════════════════════════════════════════════
+// States: 0=Idle, 1=HTF_OB_Active, 2=In_HTF_OB, 3=Displacement, 4=BOS_Confirmed, 5=Signal_Fired
+var int bull_setup_state = 0
+var int bear_setup_state = 0
+var int setup_start_bar = na  // For timeout tracking
+
 // HTF Bullish OB: last bearish candle before bullish BOS
 if htf_bull_bos and htf_close[1] < htf_open[1]
     if ob_mode == "Body"
@@ -166,6 +183,7 @@ if htf_bull_bos and htf_close[1] < htf_open[1]
     htf_bull_ob_bar := bar_index
     htf_bull_ob_active := true
     htf_bear_ob_active := false  // Cancel opposite OB
+    bear_setup_state := 0  // Reset opposite setup state
 
 // HTF Bearish OB: last bullish candle before bearish BOS
 if htf_bear_bos and htf_close[1] > htf_open[1]
@@ -178,6 +196,7 @@ if htf_bear_bos and htf_close[1] > htf_open[1]
     htf_bear_ob_bar := bar_index
     htf_bear_ob_active := true
     htf_bull_ob_active := false  // Cancel opposite OB
+    bull_setup_state := 0  // Reset opposite setup state
 
 // Check if price is in HTF OB
 in_htf_bull_ob = htf_bull_ob_active and f_in_zone(htf_bull_ob_top, htf_bull_ob_bottom)
@@ -219,11 +238,18 @@ if bear_displacement and in_htf_bear_ob
     ltf_bear_disp_bar := bar_index
     ltf_bull_disp_active := false
 
-// LTF BOS Detection (with buffer)
-bos_buffer = f_pips_to_price(bos_buffer_pips)
+// LTF BOS Detection (STRICT: buffer + close position)
+bos_pips_buffer = f_pips_to_price(bos_buffer_pips)
+bos_atr_buffer = ta.atr(disp_atr_length) * bos_atr_mult
+bos_buffer = math.max(bos_pips_buffer, bos_atr_buffer)
 
-ltf_bull_bos = ltf_bull_disp_active and not na(ltf_last_swing_high) and close > (ltf_last_swing_high + bos_buffer)
-ltf_bear_bos = ltf_bear_disp_active and not na(ltf_last_swing_low) and close < (ltf_last_swing_low - bos_buffer)
+// Check if candle closes in strong position (top/bottom X% of body)
+candle_body = math.abs(close - open)
+close_position_bull = candle_body > 0 ? (close - math.min(close, open)) / candle_body : 0
+close_position_bear = candle_body > 0 ? (math.max(close, open) - close) / candle_body : 0
+
+ltf_bull_bos = ltf_bull_disp_active and not na(ltf_last_swing_high) and close > (ltf_last_swing_high + bos_buffer) and close_position_bull >= bos_close_pos
+ltf_bear_bos = ltf_bear_disp_active and not na(ltf_last_swing_low) and close < (ltf_last_swing_low - bos_buffer) and close_position_bear >= bos_close_pos
 
 // Track BOS
 var bool ltf_bull_bos_confirmed = false
@@ -242,6 +268,32 @@ if ltf_bear_bos
     ltf_bull_bos_confirmed := false
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LIQUIDITY SWEEP DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+sweep_buffer = f_pips_to_price(sweep_buffer_pips)
+
+// Track if sweep occurred
+var bool bull_sweep_detected = false
+var bool bear_sweep_detected = false
+
+// Bull sweep: wick below swing low, but close above (inside HTF Bull OB)
+if in_htf_bull_ob and not na(ltf_last_swing_low)
+    if low < (ltf_last_swing_low - sweep_buffer) and close > ltf_last_swing_low
+        bull_sweep_detected := true
+
+// Bear sweep: wick above swing high, but close below (inside HTF Bear OB)
+if in_htf_bear_ob and not na(ltf_last_swing_high)
+    if high > (ltf_last_swing_high + sweep_buffer) and close < ltf_last_swing_high
+        bear_sweep_detected := true
+
+// Reset sweep on opposite OB
+if htf_bear_ob_active and not htf_bear_ob_active[1]
+    bull_sweep_detected := false
+if htf_bull_ob_active and not htf_bull_ob_active[1]
+    bear_sweep_detected := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // LTF OB DETECTION (for entry)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -254,6 +306,10 @@ var float ltf_bear_ob_top = na
 var float ltf_bear_ob_bottom = na
 var int ltf_bear_ob_bar = na
 var bool ltf_bear_ob_valid = false
+
+// Box IDs for LTF OB
+var box ltf_bull_ob_box = na
+var box ltf_bear_ob_box = na
 
 // Create LTF OB after displacement (last opposite candle before displacement)
 if bull_displacement and in_htf_bull_ob
@@ -296,6 +352,10 @@ var float active_bear_fvg_bottom = na
 var int active_bear_fvg_bar = na
 var bool bear_fvg_valid = false
 
+// Box IDs for FVG
+var box bull_fvg_box = na
+var box bear_fvg_box = na
+
 // Track FVG after BOS
 if bull_fvg and ltf_bull_bos_confirmed
     active_bull_fvg_top := bull_fvg_top
@@ -308,6 +368,101 @@ if bear_fvg and ltf_bear_bos_confirmed
     active_bear_fvg_bottom := bear_fvg_bottom
     active_bear_fvg_bar := bar_index
     bear_fvg_valid := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE MACHINE LOGIC (One Signal Per Setup)
+// ═══════════════════════════════════════════════════════════════════════════════
+// States: 0=Idle, 1=HTF_OB_Active, 2=In_HTF_OB, 3=Displacement, 4=BOS_Confirmed, 5=Signal_Fired
+
+// BULL SETUP STATE MACHINE
+// State 0 -> 1: HTF Bull OB becomes active
+if bull_setup_state == 0 and htf_bull_ob_active
+    bull_setup_state := 1
+    setup_start_bar := bar_index
+
+// State 1 -> 2: Price enters HTF Bull OB
+if bull_setup_state == 1 and in_htf_bull_ob
+    bull_setup_state := 2
+
+// State 2 -> 3: Displacement detected
+if bull_setup_state == 2 and ltf_bull_disp_active
+    bull_setup_state := 3
+
+// State 3 -> 4: BOS confirmed (+ sweep if required)
+if bull_setup_state == 3 and ltf_bull_bos_confirmed
+    if require_sweep
+        if bull_sweep_detected
+            bull_setup_state := 4
+    else
+        bull_setup_state := 4
+
+// INVALIDATION (Bull): close below OB bottom or displacement low
+var float bull_disp_low = na
+if bull_setup_state == 3 and ltf_bull_disp_active
+    bull_disp_low := low
+
+bull_invalidation = bull_setup_state > 0 and (close < htf_bull_ob_bottom or (not na(bull_disp_low) and close < bull_disp_low))
+if bull_invalidation
+    bull_setup_state := 0
+    ltf_bull_bos_confirmed := false
+    ltf_bull_ob_valid := false
+    bull_fvg_valid := false
+    bull_sweep_detected := false
+    bull_disp_low := na
+
+// TIMEOUT (Bull): no progress within N bars
+if bull_setup_state > 0 and bull_setup_state < 5
+    if not na(setup_start_bar) and (bar_index - setup_start_bar) > setup_timeout_bars
+        bull_setup_state := 0
+        ltf_bull_bos_confirmed := false
+        ltf_bull_ob_valid := false
+        bull_fvg_valid := false
+        bull_sweep_detected := false
+
+// BEAR SETUP STATE MACHINE
+// State 0 -> 1: HTF Bear OB becomes active
+if bear_setup_state == 0 and htf_bear_ob_active
+    bear_setup_state := 1
+    setup_start_bar := bar_index
+
+// State 1 -> 2: Price enters HTF Bear OB
+if bear_setup_state == 1 and in_htf_bear_ob
+    bear_setup_state := 2
+
+// State 2 -> 3: Displacement detected
+if bear_setup_state == 2 and ltf_bear_disp_active
+    bear_setup_state := 3
+
+// State 3 -> 4: BOS confirmed (+ sweep if required)
+if bear_setup_state == 3 and ltf_bear_bos_confirmed
+    if require_sweep
+        if bear_sweep_detected
+            bear_setup_state := 4
+    else
+        bear_setup_state := 4
+
+// INVALIDATION (Bear): close above OB top or displacement high
+var float bear_disp_high = na
+if bear_setup_state == 3 and ltf_bear_disp_active
+    bear_disp_high := high
+
+bear_invalidation = bear_setup_state > 0 and (close > htf_bear_ob_top or (not na(bear_disp_high) and close > bear_disp_high))
+if bear_invalidation
+    bear_setup_state := 0
+    ltf_bear_bos_confirmed := false
+    ltf_bear_ob_valid := false
+    bear_fvg_valid := false
+    bear_sweep_detected := false
+    bear_disp_high := na
+
+// TIMEOUT (Bear): no progress within N bars
+if bear_setup_state > 0 and bear_setup_state < 5
+    if not na(setup_start_bar) and (bar_index - setup_start_bar) > setup_timeout_bars
+        bear_setup_state := 0
+        ltf_bear_bos_confirmed := false
+        ltf_bear_ob_valid := false
+        bear_fvg_valid := false
+        bear_sweep_detected := false
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENTRY LOGIC
@@ -324,10 +479,17 @@ fvg_retest_bear = bear_fvg_valid and f_in_zone(active_bear_fvg_top, active_bear_
 bull_confirmation = f_is_engulfing(true) or f_is_strong_close(true)
 bear_confirmation = f_is_engulfing(false) or f_is_strong_close(false)
 
-// Entry signals
-buy_signal = in_htf_bull_ob and ltf_bull_bos_confirmed and ((use_ltf_ob and ltf_ob_retest_bull) or (use_fvg and fvg_retest_bull)) and bull_confirmation
+// Entry signals (ONE SIGNAL PER SETUP via state machine)
+// Only fire signal in state 4 (BOS_Confirmed), then transition to state 5 (Signal_Fired)
+buy_signal = bull_setup_state == 4 and ((use_ltf_ob and ltf_ob_retest_bull) or (use_fvg and fvg_retest_bull)) and bull_confirmation
 
-sell_signal = in_htf_bear_ob and ltf_bear_bos_confirmed and ((use_ltf_ob and ltf_ob_retest_bear) or (use_fvg and fvg_retest_bear)) and bear_confirmation
+sell_signal = bear_setup_state == 4 and ((use_ltf_ob and ltf_ob_retest_bear) or (use_fvg and fvg_retest_bear)) and bear_confirmation
+
+// Transition to state 5 after signal fired
+if buy_signal
+    bull_setup_state := 5
+if sell_signal
+    bear_setup_state := 5
 
 // Track entry for SL/TP calculation
 var float entry_price = na
@@ -386,26 +548,95 @@ if sell_signal
 // VISUALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// HTF OB Boxes
-if show_htf_ob and htf_bull_ob_active and not na(htf_bull_ob_top)
-    box.new(htf_bull_ob_bar, htf_bull_ob_top, bar_index + 50, htf_bull_ob_bottom, border_color=color.new(color.green, 50), bgcolor=color.new(color.green, 90), border_width=1, extend=extend.right, text="M30 Bull OB", text_color=color.green, text_size=size.small)
+// HTF OB Boxes (create once, update, delete)
+if show_htf_ob
+    // HTF Bull OB
+    if htf_bull_ob_active and not na(htf_bull_ob_top)
+        if na(htf_bull_ob_box) or not htf_bull_ob_active[1]
+            if not na(htf_bull_ob_box)
+                box.delete(htf_bull_ob_box)
+            htf_bull_ob_box := box.new(htf_bull_ob_bar, htf_bull_ob_top, bar_index + 50, htf_bull_ob_bottom, border_color=color.new(color.green, 50), bgcolor=color.new(color.green, 90), border_width=1, text="M30 Bull OB", text_color=color.green, text_size=size.small)
+        else
+            box.set_right(htf_bull_ob_box, bar_index + 50)
+            box.set_top(htf_bull_ob_box, htf_bull_ob_top)
+            box.set_bottom(htf_bull_ob_box, htf_bull_ob_bottom)
+    else if not na(htf_bull_ob_box)
+        box.delete(htf_bull_ob_box)
+        htf_bull_ob_box := na
 
-if show_htf_ob and htf_bear_ob_active and not na(htf_bear_ob_top)
-    box.new(htf_bear_ob_bar, htf_bear_ob_top, bar_index + 50, htf_bear_ob_bottom, border_color=color.new(color.red, 50), bgcolor=color.new(color.red, 90), border_width=1, extend=extend.right, text="M30 Bear OB", text_color=color.red, text_size=size.small)
+    // HTF Bear OB
+    if htf_bear_ob_active and not na(htf_bear_ob_top)
+        if na(htf_bear_ob_box) or not htf_bear_ob_active[1]
+            if not na(htf_bear_ob_box)
+                box.delete(htf_bear_ob_box)
+            htf_bear_ob_box := box.new(htf_bear_ob_bar, htf_bear_ob_top, bar_index + 50, htf_bear_ob_bottom, border_color=color.new(color.red, 50), bgcolor=color.new(color.red, 90), border_width=1, text="M30 Bear OB", text_color=color.red, text_size=size.small)
+        else
+            box.set_right(htf_bear_ob_box, bar_index + 50)
+            box.set_top(htf_bear_ob_box, htf_bear_ob_top)
+            box.set_bottom(htf_bear_ob_box, htf_bear_ob_bottom)
+    else if not na(htf_bear_ob_box)
+        box.delete(htf_bear_ob_box)
+        htf_bear_ob_box := na
 
-// LTF OB Boxes
-if show_ltf_ob and ltf_bull_ob_valid and not na(ltf_bull_ob_top)
-    box.new(ltf_bull_ob_bar, ltf_bull_ob_top, bar_index + 20, ltf_bull_ob_bottom, border_color=color.new(color.blue, 30), bgcolor=color.new(color.blue, 85), border_width=1, extend=extend.right, text="LTF Bull OB", text_color=color.blue, text_size=size.tiny)
+// LTF OB Boxes (create once, update, delete)
+if show_ltf_ob
+    // LTF Bull OB
+    if ltf_bull_ob_valid and not na(ltf_bull_ob_top)
+        if na(ltf_bull_ob_box) or not ltf_bull_ob_valid[1]
+            if not na(ltf_bull_ob_box)
+                box.delete(ltf_bull_ob_box)
+            ltf_bull_ob_box := box.new(ltf_bull_ob_bar, ltf_bull_ob_top, bar_index + 20, ltf_bull_ob_bottom, border_color=color.new(color.blue, 30), bgcolor=color.new(color.blue, 85), border_width=1, text="LTF Bull OB", text_color=color.blue, text_size=size.tiny)
+        else
+            box.set_right(ltf_bull_ob_box, bar_index + 20)
+            box.set_top(ltf_bull_ob_box, ltf_bull_ob_top)
+            box.set_bottom(ltf_bull_ob_box, ltf_bull_ob_bottom)
+    else if not na(ltf_bull_ob_box)
+        box.delete(ltf_bull_ob_box)
+        ltf_bull_ob_box := na
 
-if show_ltf_ob and ltf_bear_ob_valid and not na(ltf_bear_ob_top)
-    box.new(ltf_bear_ob_bar, ltf_bear_ob_top, bar_index + 20, ltf_bear_ob_bottom, border_color=color.new(color.orange, 30), bgcolor=color.new(color.orange, 85), border_width=1, extend=extend.right, text="LTF Bear OB", text_color=color.orange, text_size=size.tiny)
+    // LTF Bear OB
+    if ltf_bear_ob_valid and not na(ltf_bear_ob_top)
+        if na(ltf_bear_ob_box) or not ltf_bear_ob_valid[1]
+            if not na(ltf_bear_ob_box)
+                box.delete(ltf_bear_ob_box)
+            ltf_bear_ob_box := box.new(ltf_bear_ob_bar, ltf_bear_ob_top, bar_index + 20, ltf_bear_ob_bottom, border_color=color.new(color.orange, 30), bgcolor=color.new(color.orange, 85), border_width=1, text="LTF Bear OB", text_color=color.orange, text_size=size.tiny)
+        else
+            box.set_right(ltf_bear_ob_box, bar_index + 20)
+            box.set_top(ltf_bear_ob_box, ltf_bear_ob_top)
+            box.set_bottom(ltf_bear_ob_box, ltf_bear_ob_bottom)
+    else if not na(ltf_bear_ob_box)
+        box.delete(ltf_bear_ob_box)
+        ltf_bear_ob_box := na
 
-// FVG Boxes
-if show_fvg and bull_fvg_valid and not na(active_bull_fvg_top)
-    box.new(active_bull_fvg_bar, active_bull_fvg_top, bar_index + 15, active_bull_fvg_bottom, border_color=color.new(color.aqua, 40), bgcolor=color.new(color.aqua, 88), border_width=1, extend=extend.right, text="FVG", text_color=color.aqua, text_size=size.tiny)
+// FVG Boxes (create once, update, delete)
+if show_fvg
+    // Bull FVG
+    if bull_fvg_valid and not na(active_bull_fvg_top)
+        if na(bull_fvg_box) or not bull_fvg_valid[1]
+            if not na(bull_fvg_box)
+                box.delete(bull_fvg_box)
+            bull_fvg_box := box.new(active_bull_fvg_bar, active_bull_fvg_top, bar_index + 15, active_bull_fvg_bottom, border_color=color.new(color.aqua, 40), bgcolor=color.new(color.aqua, 88), border_width=1, text="FVG", text_color=color.aqua, text_size=size.tiny)
+        else
+            box.set_right(bull_fvg_box, bar_index + 15)
+            box.set_top(bull_fvg_box, active_bull_fvg_top)
+            box.set_bottom(bull_fvg_box, active_bull_fvg_bottom)
+    else if not na(bull_fvg_box)
+        box.delete(bull_fvg_box)
+        bull_fvg_box := na
 
-if show_fvg and bear_fvg_valid and not na(active_bear_fvg_top)
-    box.new(active_bear_fvg_bar, active_bear_fvg_top, bar_index + 15, active_bear_fvg_bottom, border_color=color.new(color.fuchsia, 40), bgcolor=color.new(color.fuchsia, 88), border_width=1, extend=extend.right, text="FVG", text_color=color.fuchsia, text_size=size.tiny)
+    // Bear FVG
+    if bear_fvg_valid and not na(active_bear_fvg_top)
+        if na(bear_fvg_box) or not bear_fvg_valid[1]
+            if not na(bear_fvg_box)
+                box.delete(bear_fvg_box)
+            bear_fvg_box := box.new(active_bear_fvg_bar, active_bear_fvg_top, bar_index + 15, active_bear_fvg_bottom, border_color=color.new(color.fuchsia, 40), bgcolor=color.new(color.fuchsia, 88), border_width=1, text="FVG", text_color=color.fuchsia, text_size=size.tiny)
+        else
+            box.set_right(bear_fvg_box, bar_index + 15)
+            box.set_top(bear_fvg_box, active_bear_fvg_top)
+            box.set_bottom(bear_fvg_box, active_bear_fvg_bottom)
+    else if not na(bear_fvg_box)
+        box.delete(bear_fvg_box)
+        bear_fvg_box := na
 
 // Labels
 if show_labels
