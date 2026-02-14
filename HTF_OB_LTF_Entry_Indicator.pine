@@ -72,7 +72,7 @@ f_avg_body(lookback) =>
 // Check for displacement candle
 f_is_displacement(is_bullish) =>
     body = math.abs(close - open)
-    range = high - low
+    candle_range = high - low
     avg_body = f_avg_body(disp_body_lookback)
     atr_val = ta.atr(disp_atr_length)
 
@@ -80,11 +80,11 @@ f_is_displacement(is_bullish) =>
     body_cond = body >= disp_body_mult * avg_body
 
     // Range condition
-    range_cond = range >= disp_atr_mult * atr_val
+    range_cond = candle_range >= disp_atr_mult * atr_val
 
     // Close position condition
-    close_pos_bull = (close - low) / range
-    close_pos_bear = (high - close) / range
+    close_pos_bull = (close - low) / candle_range
+    close_pos_bear = (high - close) / candle_range
     close_cond = is_bullish ? close_pos_bull > disp_close_threshold : close_pos_bear > disp_close_threshold
 
     (body_cond or range_cond) and close_cond
@@ -112,13 +112,13 @@ f_is_engulfing(is_bullish) =>
 
 // Check for strong close
 f_is_strong_close(is_bullish) =>
-    range = high - low
-    if range == 0
+    candle_range = high - low
+    if candle_range == 0
         false
     else if is_bullish
-        (close - low) / range > 0.7
+        (close - low) / candle_range > 0.7
     else
-        (high - close) / range > 0.7
+        (high - close) / candle_range > 0.7
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HTF ORDER BLOCK DETECTION
