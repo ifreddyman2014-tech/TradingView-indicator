@@ -325,13 +325,9 @@ bull_confirmation = f_is_engulfing(true) or f_is_strong_close(true)
 bear_confirmation = f_is_engulfing(false) or f_is_strong_close(false)
 
 // Entry signals
-buy_signal = in_htf_bull_ob and ltf_bull_bos_confirmed and
-             ((use_ltf_ob and ltf_ob_retest_bull) or (use_fvg and fvg_retest_bull)) and
-             bull_confirmation
+buy_signal = in_htf_bull_ob and ltf_bull_bos_confirmed and ((use_ltf_ob and ltf_ob_retest_bull) or (use_fvg and fvg_retest_bull)) and bull_confirmation
 
-sell_signal = in_htf_bear_ob and ltf_bear_bos_confirmed and
-              ((use_ltf_ob and ltf_ob_retest_bear) or (use_fvg and fvg_retest_bear)) and
-              bear_confirmation
+sell_signal = in_htf_bear_ob and ltf_bear_bos_confirmed and ((use_ltf_ob and ltf_ob_retest_bear) or (use_fvg and fvg_retest_bear)) and bear_confirmation
 
 // Track entry for SL/TP calculation
 var float entry_price = na
@@ -433,95 +429,67 @@ if show_fvg and bear_fvg_valid and not na(active_bear_fvg_top)
 if show_labels
     // In HTF OB label
     if in_htf_bull_ob and not in_htf_bull_ob[1]
-        label.new(bar_index, high, "In HTF OB", style=label.style_label_down,
-                 color=color.new(color.green, 20), textcolor=color.white, size=size.tiny)
+        label.new(bar_index, high, "In HTF OB", style=label.style_label_down, color=color.new(color.green, 20), textcolor=color.white, size=size.tiny)
 
     if in_htf_bear_ob and not in_htf_bear_ob[1]
-        label.new(bar_index, low, "In HTF OB", style=label.style_label_up,
-                 color=color.new(color.red, 20), textcolor=color.white, size=size.tiny)
+        label.new(bar_index, low, "In HTF OB", style=label.style_label_up, color=color.new(color.red, 20), textcolor=color.white, size=size.tiny)
 
     // Displacement labels
     if bull_displacement and in_htf_bull_ob
-        label.new(bar_index, low, "Displacement", style=label.style_label_up,
-                 color=color.new(color.blue, 30), textcolor=color.white, size=size.tiny)
+        label.new(bar_index, low, "Displacement", style=label.style_label_up, color=color.new(color.blue, 30), textcolor=color.white, size=size.tiny)
 
     if bear_displacement and in_htf_bear_ob
-        label.new(bar_index, high, "Displacement", style=label.style_label_down,
-                 color=color.new(color.orange, 30), textcolor=color.white, size=size.tiny)
+        label.new(bar_index, high, "Displacement", style=label.style_label_down, color=color.new(color.orange, 30), textcolor=color.white, size=size.tiny)
 
     // BOS labels
     if ltf_bull_bos
-        label.new(bar_index, high, "BOS", style=label.style_label_down,
-                 color=color.new(color.green, 10), textcolor=color.white, size=size.small)
+        label.new(bar_index, high, "BOS", style=label.style_label_down, color=color.new(color.green, 10), textcolor=color.white, size=size.small)
 
     if ltf_bear_bos
-        label.new(bar_index, low, "BOS", style=label.style_label_up,
-                 color=color.new(color.red, 10), textcolor=color.white, size=size.small)
+        label.new(bar_index, low, "BOS", style=label.style_label_up, color=color.new(color.red, 10), textcolor=color.white, size=size.small)
 
 // Entry signals with arrows and detailed labels
-plotshape(buy_signal, "Buy Signal", shape.triangleup, location.belowbar,
-         color=color.new(color.lime, 0), size=size.normal)
+plotshape(buy_signal, "Buy Signal", shape.triangleup, location.belowbar, color=color.new(color.lime, 0), size=size.normal)
 
-plotshape(sell_signal, "Sell Signal", shape.triangledown, location.abovebar,
-         color=color.new(color.red, 0), size=size.normal)
+plotshape(sell_signal, "Sell Signal", shape.triangledown, location.abovebar, color=color.new(color.red, 0), size=size.normal)
 
 if buy_signal
     risk_pips = (entry_price - entry_sl) / f_pip_size()
-    label_text = "BUY\nSL: " + str.tostring(math.round(risk_pips, 1)) + " pips\n" +
-                 "TP1: " + str.tostring(tp1_rr) + "R (" + str.tostring(partial_close_pct) + "%)\n" +
-                 "TP2: " + str.tostring(tp2_rr) + "R\n" +
-                 "TP3: " + str.tostring(tp3_rr) + "R"
+    label_text = "BUY\nSL: " + str.tostring(math.round(risk_pips, 1)) + " pips\n" + "TP1: " + str.tostring(tp1_rr) + "R (" + str.tostring(partial_close_pct) + "%)\n" + "TP2: " + str.tostring(tp2_rr) + "R\n" + "TP3: " + str.tostring(tp3_rr) + "R"
 
-    label.new(bar_index, low, label_text, style=label.style_label_up,
-             color=color.new(color.lime, 0), textcolor=color.black, size=size.normal)
+    label.new(bar_index, low, label_text, style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.black, size=size.normal)
 
 if sell_signal
     risk_pips = (entry_sl - entry_price) / f_pip_size()
-    label_text = "SELL\nSL: " + str.tostring(math.round(risk_pips, 1)) + " pips\n" +
-                 "TP1: " + str.tostring(tp1_rr) + "R (" + str.tostring(partial_close_pct) + "%)\n" +
-                 "TP2: " + str.tostring(tp2_rr) + "R\n" +
-                 "TP3: " + str.tostring(tp3_rr) + "R"
+    label_text = "SELL\nSL: " + str.tostring(math.round(risk_pips, 1)) + " pips\n" + "TP1: " + str.tostring(tp1_rr) + "R (" + str.tostring(partial_close_pct) + "%)\n" + "TP2: " + str.tostring(tp2_rr) + "R\n" + "TP3: " + str.tostring(tp3_rr) + "R"
 
-    label.new(bar_index, high, label_text, style=label.style_label_down,
-             color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
+    label.new(bar_index, high, label_text, style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
 
 // Plot SL/TP levels
-plot(not na(entry_price) and not na(entry_sl) ? entry_sl : na,
-     "Stop Loss", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(not na(entry_price) and not na(entry_sl) ? entry_sl : na, "Stop Loss", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
 
-plot(not na(entry_price) and not na(entry_tp1) ? entry_tp1 : na,
-     "TP1 (Partial)", color=color.new(color.yellow, 0), linewidth=1, style=plot.style_linebr)
+plot(not na(entry_price) and not na(entry_tp1) ? entry_tp1 : na, "TP1 (Partial)", color=color.new(color.yellow, 0), linewidth=1, style=plot.style_linebr)
 
-plot(not na(entry_price) and not na(entry_tp2) ? entry_tp2 : na,
-     "TP2", color=color.new(color.orange, 0), linewidth=1, style=plot.style_linebr)
+plot(not na(entry_price) and not na(entry_tp2) ? entry_tp2 : na, "TP2", color=color.new(color.orange, 0), linewidth=1, style=plot.style_linebr)
 
-plot(not na(entry_price) and not na(entry_tp3) ? entry_tp3 : na,
-     "TP3", color=color.new(color.lime, 0), linewidth=1, style=plot.style_linebr)
+plot(not na(entry_price) and not na(entry_tp3) ? entry_tp3 : na, "TP3", color=color.new(color.lime, 0), linewidth=1, style=plot.style_linebr)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-alertcondition(in_htf_bull_ob and not in_htf_bull_ob[1], "Price Enters HTF Bull OB",
-              "Price has entered HTF Bullish Order Block zone")
+alertcondition(in_htf_bull_ob and not in_htf_bull_ob[1], "Price Enters HTF Bull OB", "Price has entered HTF Bullish Order Block zone")
 
-alertcondition(in_htf_bear_ob and not in_htf_bear_ob[1], "Price Enters HTF Bear OB",
-              "Price has entered HTF Bearish Order Block zone")
+alertcondition(in_htf_bear_ob and not in_htf_bear_ob[1], "Price Enters HTF Bear OB", "Price has entered HTF Bearish Order Block zone")
 
-alertcondition(bull_displacement and in_htf_bull_ob, "Bullish Displacement Detected",
-              "Bullish displacement candle detected in HTF Bull OB")
+alertcondition(bull_displacement and in_htf_bull_ob, "Bullish Displacement Detected", "Bullish displacement candle detected in HTF Bull OB")
 
-alertcondition(bear_displacement and in_htf_bear_ob, "Bearish Displacement Detected",
-              "Bearish displacement candle detected in HTF Bear OB")
+alertcondition(bear_displacement and in_htf_bear_ob, "Bearish Displacement Detected", "Bearish displacement candle detected in HTF Bear OB")
 
-alertcondition(ltf_bull_bos, "Bullish BOS Confirmed",
-              "LTF Bullish Break of Structure confirmed")
+alertcondition(ltf_bull_bos, "Bullish BOS Confirmed", "LTF Bullish Break of Structure confirmed")
 
-alertcondition(ltf_bear_bos, "Bearish BOS Confirmed",
-              "LTF Bearish Break of Structure confirmed")
+alertcondition(ltf_bear_bos, "Bearish BOS Confirmed", "LTF Bearish Break of Structure confirmed")
 
-alertcondition(buy_signal, "BUY Entry Signal",
-              "Potential BUY entry formed - all conditions met")
+alertcondition(buy_signal, "BUY Entry Signal", "Potential BUY entry formed - all conditions met")
 
-alertcondition(sell_signal, "SELL Entry Signal",
-              "Potential SELL entry formed - all conditions met")
+alertcondition(sell_signal, "SELL Entry Signal", "Potential SELL entry formed - all conditions met")
