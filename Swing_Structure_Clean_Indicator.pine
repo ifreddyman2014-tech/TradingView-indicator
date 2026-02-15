@@ -1,0 +1,341 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Claude AI - Swing Structure (Clean BOS Logic)
+
+//@version=5
+indicator("Swing Structure - Clean BOS", overlay=true, max_boxes_count=50, max_labels_count=200, max_lines_count=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ / SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Свинги (Pivots)
+pivotLength = input.int(5, "Pivot Length", minval=2, maxval=20,
+     tooltip="Количество свечей для подтверждения swing high/low")
+
+// Displacement (опционально)
+useDisplacement = input.bool(true, "Требовать Displacement для BOS", group="Фильтры")
+displacementFactor = input.float(1.5, "Displacement Factor", minval=1.0, maxval=5.0, step=0.1, group="Фильтры")
+avgBodyPeriod = input.int(10, "Период для среднего тела", minval=5, maxval=50, group="Фильтры")
+
+// Order Blocks
+showOB = input.bool(true, "Показать Order Blocks", group="Order Blocks")
+useWicksForOB = input.bool(false, "Использовать фитили для OB (иначе только тело)", group="Order Blocks")
+bullOBColor = input.color(color.new(color.blue, 85), "Цвет Bullish OB", group="Order Blocks")
+bearOBColor = input.color(color.new(color.red, 85), "Цвет Bearish OB", group="Order Blocks")
+
+// Визуализация
+showPivotLabels = input.bool(true, "Показать метки H/L на свингах", group="Визуализация")
+showBOSLines = input.bool(true, "Показать BOS линии", group="Визуализация")
+bosLineStyle = input.string("Dashed", "Стиль BOS линии", options=["Solid", "Dashed", "Dotted"], group="Визуализация")
+
+// Mitigation
+enableMitigation = input.bool(true, "Удалять отработанные OB", group="Mitigation")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ВСПОМОГАТЕЛЬНЫЕ РАСЧЁТЫ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Displacement
+candleBody = math.abs(close - open)
+avgBody = ta.sma(candleBody, avgBodyPeriod)
+isImpulseCandle = candleBody > (avgBody * displacementFactor)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. SWING STRUCTURE: ОПРЕДЕЛЕНИЕ PIVOT POINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Подтверждённые пивоты (появляются с задержкой = pivotLength)
+pivotHigh = ta.pivothigh(high, pivotLength, pivotLength)
+pivotLow = ta.pivotlow(low, pivotLength, pivotLength)
+
+// Хранение последних подтверждённых уровней
+var float lastPivotHigh = na
+var int lastPivotHighBar = na
+
+var float lastPivotLow = na
+var int lastPivotLowBar = na
+
+// Флаги текущей структуры (состояние тренда)
+var bool bullishStructure = false  // true = мы в бычьей структуре (последний BOS был вверх)
+var bool bearishStructure = false  // true = мы в медвежьей структуре (последний BOS был вниз)
+
+// Обновление пивотов
+bool newPivotHigh = not na(pivotHigh)
+bool newPivotLow = not na(pivotLow)
+
+if newPivotHigh
+    lastPivotHigh := pivotHigh
+    lastPivotHighBar := bar_index - pivotLength
+
+    // ВАЖНО: Новый Pivot High после бычьей структуры → сбрасываем флаг
+    // Это позволит нарисовать новый BOS вниз при пробое нового Pivot Low
+    if bullishStructure
+        bullishStructure := false
+
+if newPivotLow
+    lastPivotLow := pivotLow
+    lastPivotLowBar := bar_index - pivotLength
+
+    // ВАЖНО: Новый Pivot Low после медвежьей структуры → сбрасываем флаг
+    // Это позволит нарисовать новый BOS вверх при пробое нового Pivot High
+    if bearishStructure
+        bearishStructure := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2. ВИЗУАЛИЗАЦИЯ SWING HIGHS/LOWS (H/L МЕТКИ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showPivotLabels and newPivotHigh
+    label.new(
+         lastPivotHighBar,
+         lastPivotHigh,
+         "H",
+         color=color.new(color.red, 100),  // прозрачный фон
+         style=label.style_none,
+         textcolor=color.red,
+         size=size.tiny,
+         yloc=yloc.price
+     )
+
+if showPivotLabels and newPivotLow
+    label.new(
+         lastPivotLowBar,
+         lastPivotLow,
+         "L",
+         color=color.new(color.green, 100),  // прозрачный фон
+         style=label.style_none,
+         textcolor=color.green,
+         size=size.tiny,
+         yloc=yloc.price
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3. STRICT BOS LOGIC (SWING STRUCTURE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Условия для BOS
+bool buyBOSCondition = not na(lastPivotHigh) and
+     close > lastPivotHigh and
+     (not useDisplacement or isImpulseCandle) and
+     not bullishStructure  // КЛЮЧЕВОЕ: рисуем только если ещё НЕ в бычьей структуре
+
+bool sellBOSCondition = not na(lastPivotLow) and
+     close < lastPivotLow and
+     (not useDisplacement or isImpulseCandle) and
+     not bearishStructure  // КЛЮЧЕВОЕ: рисуем только если ещё НЕ в медвежьей структуре
+
+// Переменные для хранения данных BOS (для рисования линий и OB)
+var float bosLevel = na
+var int bosBar = na
+var bool isBullishBOS = na
+
+// BUY BOS: пробой вверх
+if buyBOSCondition
+    bullishStructure := true
+    bearishStructure := false
+    bosLevel := lastPivotHigh
+    bosBar := lastPivotHighBar
+    isBullishBOS := true
+
+// SELL BOS: пробой вниз
+if sellBOSCondition
+    bearishStructure := true
+    bullishStructure := false
+    bosLevel := lastPivotLow
+    bosBar := lastPivotLowBar
+    isBullishBOS := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. ВИЗУАЛИЗАЦИЯ BOS (ПРОФЕССИОНАЛЬНЫЕ ЛИНИИ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Определяем стиль линии
+lineStyleValue = bosLineStyle == "Solid" ? line.style_solid :
+     bosLineStyle == "Dashed" ? line.style_dashed :
+     line.style_dotted
+
+if showBOSLines and buyBOSCondition
+    // Рисуем пунктирную линию от Pivot High до свечи пробоя
+    bosLine = line.new(
+         x1=bosBar,
+         y1=bosLevel,
+         x2=bar_index,
+         y2=bosLevel,
+         color=color.new(color.blue, 0),
+         width=1,
+         style=lineStyleValue
+     )
+
+    // Метка "BOS" на линии
+    label.new(
+         bar_index,
+         bosLevel,
+         "BOS ↑",
+         color=color.new(color.blue, 20),
+         style=label.style_label_left,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.price
+     )
+
+if showBOSLines and sellBOSCondition
+    // Рисуем пунктирную линию от Pivot Low до свечи пробоя
+    bosLine = line.new(
+         x1=bosBar,
+         y1=bosLevel,
+         x2=bar_index,
+         y2=bosLevel,
+         color=color.new(color.red, 0),
+         width=1,
+         style=lineStyleValue
+     )
+
+    // Метка "BOS" на линии
+    label.new(
+         bar_index,
+         bosLevel,
+         "BOS ↓",
+         color=color.new(color.red, 20),
+         style=label.style_label_left,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.price
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. ORDER BLOCKS (ТОЛЬКО ДЛЯ SWING BREAKS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Типы для хранения OB
+type OrderBlock
+    box boxObj
+    float top
+    float bottom
+    bool isBullish
+
+var array<OrderBlock> activeOBs = array.new<OrderBlock>()
+
+// Функция поиска OB свечи
+findOBCandle(lookback, searchBearish) =>
+    var int foundBar = na
+    var float foundTop = na
+    var float foundBottom = na
+
+    for i = 1 to lookback
+        if searchBearish and close[i] < open[i]  // медвежья свеча для BUY BOS
+            foundBar := bar_index - i
+            if useWicksForOB
+                foundTop := high[i]
+                foundBottom := low[i]
+            else
+                foundTop := open[i]
+                foundBottom := close[i]
+            break
+        if not searchBearish and close[i] > open[i]  // бычья свеча для SELL BOS
+            foundBar := bar_index - i
+            if useWicksForOB
+                foundTop := high[i]
+                foundBottom := low[i]
+            else
+                foundTop := close[i]
+                foundBottom := open[i]
+            break
+
+    [foundBar, foundTop, foundBottom]
+
+// Рисуем OB при BUY BOS
+if showOB and buyBOSCondition
+    [obBar, obTop, obBottom] = findOBCandle(20, true)
+
+    if not na(obBar)
+        newBox = box.new(
+             left=obBar,
+             top=obTop,
+             right=bar_index + 50,
+             bottom=obBottom,
+             border_color=color.new(color.blue, 50),
+             bgcolor=bullOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.blue,
+             text_size=size.tiny
+         )
+
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, true))
+
+// Рисуем OB при SELL BOS
+if showOB and sellBOSCondition
+    [obBar, obTop, obBottom] = findOBCandle(20, false)
+
+    if not na(obBar)
+        newBox = box.new(
+             left=obBar,
+             top=obTop,
+             right=bar_index + 50,
+             bottom=obBottom,
+             border_color=color.new(color.red, 50),
+             bgcolor=bearOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.red,
+             text_size=size.tiny
+         )
+
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, false))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6. MITIGATION: УДАЛЕНИЕ ОТРАБОТАННЫХ OB
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if enableMitigation and array.size(activeOBs) > 0
+    for i = array.size(activeOBs) - 1 to 0
+        ob = array.get(activeOBs, i)
+
+        isMitigated = false
+
+        if ob.isBullish
+            if close < ob.bottom
+                isMitigated := true
+        else
+            if close > ob.top
+                isMitigated := true
+
+        if isMitigated
+            box.delete(ob.boxObj)
+            array.remove(activeOBs, i)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEBUG ИНФОРМАЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showDebug = input.bool(false, "Показать Debug таблицу", group="Debug")
+
+if showDebug
+    var table debugTable = table.new(position.top_right, 2, 5, border_width=1)
+
+    if barstate.islast
+        table.cell(debugTable, 0, 0, "Структура:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 0,
+             bullishStructure ? "🟢 BULLISH" : bearishStructure ? "🔴 BEARISH" : "⚪ NEUTRAL",
+             text_color=bullishStructure ? color.lime : bearishStructure ? color.red : color.gray,
+             bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 1, "Last Pivot High:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 1, str.tostring(lastPivotHigh, "#.#####"), text_color=color.red, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 2, "Last Pivot Low:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 2, str.tostring(lastPivotLow, "#.#####"), text_color=color.green, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 3, "Активных OB:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 3, str.tostring(array.size(activeOBs)), text_color=color.yellow, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 4, "Displacement:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 4, isImpulseCandle ? "✓" : "✗",
+             text_color=isImpulseCandle ? color.lime : color.gray,
+             bgcolor=color.new(color.gray, 70))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// КОНЕЦ СКРИПТА
+// ═══════════════════════════════════════════════════════════════════════════════
