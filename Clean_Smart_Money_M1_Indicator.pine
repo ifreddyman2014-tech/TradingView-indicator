@@ -1,0 +1,280 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Claude AI - Clean Smart Money M1 Indicator with Precise Visualization
+
+//@version=5
+indicator("Smart Money M1 - Clean & Precise", overlay=true, max_boxes_count=100, max_labels_count=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ / SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Свинги (Swing Detection)
+pivotLength = input.int(5, "Pivot Length", minval=2, maxval=20,
+     tooltip="Количество свечей слева/справа для подтверждения локального экстремума")
+
+// Displacement (Импульс)
+displacementFactor = input.float(1.5, "Displacement Factor", minval=1.0, maxval=5.0, step=0.1,
+     tooltip="Тело свечи пробоя должно быть больше среднего × этот коэффициент")
+avgBodyLength = input.int(10, "Период для среднего тела", minval=5, maxval=50)
+
+// Визуализация
+showBOSLabels = input.bool(true, "Показать BOS метки", group="Визуализация")
+showOrderBlocks = input.bool(true, "Показать Order Blocks", group="Визуализация")
+bullOBColor = input.color(color.new(color.green, 85), "Цвет Bullish OB", group="Визуализация")
+bearOBColor = input.color(color.new(color.red, 85), "Цвет Bearish OB", group="Визуализация")
+
+// Mitigation (Отработка OB)
+enableMitigation = input.bool(true, "Удалять отработанные OB", group="Mitigation",
+     tooltip="Удалять OB, когда цена полностью пробивает их в обратную сторону")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ВСПОМОГАТЕЛЬНЫЕ РАСЧЁТЫ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Тело свечи (абсолютное значение)
+candleBody = math.abs(close - open)
+
+// Среднее тело за последние N свечей
+avgBody = ta.sma(candleBody, avgBodyLength)
+
+// Проверка на импульсную свечу (Displacement)
+isImpulseCandle = candleBody > (avgBody * displacementFactor)
+
+// Направление свечи
+isBullish = close > open
+isBearish = close < open
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ОПРЕДЕЛЕНИЕ СВИНГОВ (PIVOTS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Подтверждённые пивоты (появляются с задержкой)
+pivotHigh = ta.pivothigh(high, pivotLength, pivotLength)
+pivotLow = ta.pivotlow(low, pivotLength, pivotLength)
+
+// Переменные для хранения последних подтверждённых уровней
+var float lastPivotHigh = na
+var float lastPivotLow = na
+
+// Обновление при появлении нового пивота
+if not na(pivotHigh)
+    lastPivotHigh := pivotHigh
+
+if not na(pivotLow)
+    lastPivotLow := pivotLow
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// СТРОГАЯ ЛОГИКА BOS (Break of Structure)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// BUY BOS: Close пробивает Pivot High + импульс + бычья свеча
+buyBOS = not na(lastPivotHigh) and
+     close > lastPivotHigh and
+     isImpulseCandle and
+     isBullish
+
+// SELL BOS: Close пробивает Pivot Low + импульс + медвежья свеча
+sellBOS = not na(lastPivotLow) and
+     close < lastPivotLow and
+     isImpulseCandle and
+     isBearish
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ПОИСК ORDER BLOCK (OB) СВЕЧИ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Функция поиска последней противоположной свечи перед импульсом
+findLastOppositeCandle(lookback, searchBearish) =>
+    var int foundBar = na
+    var float foundTop = na
+    var float foundBottom = na
+
+    for i = 1 to lookback
+        // Для BUY BOS ищем медвежью свечу
+        if searchBearish and close[i] < open[i]
+            foundBar := bar_index - i
+            foundTop := open[i]      // верх тела медвежьей свечи
+            foundBottom := close[i]  // низ тела медвежьей свечи
+            break
+        // Для SELL BOS ищем бычью свечу
+        if not searchBearish and close[i] > open[i]
+            foundBar := bar_index - i
+            foundTop := close[i]     // верх тела бычьей свечи
+            foundBottom := open[i]   // низ тела бычьей свечи
+            break
+
+    [foundBar, foundTop, foundBottom]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ХРАНИЛИЩЕ АКТИВНЫХ ORDER BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Типы для хранения OB
+type OrderBlock
+    box boxObj          // объект коробки
+    float top           // верхняя граница
+    float bottom        // нижняя граница
+    bool isBullish      // тип OB
+
+// Массивы для хранения активных OB
+var array<OrderBlock> activeOBs = array.new<OrderBlock>()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// СОЗДАНИЕ ORDER BLOCKS ПРИ BOS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// При BUY BOS создаём Bullish OB
+if buyBOS and showOrderBlocks
+    [obBar, obTop, obBottom] = findLastOppositeCandle(20, true)
+
+    if not na(obBar)
+        // Создаём коробку СТРОГО от той свечи, которая сформировала OB
+        newBox = box.new(
+             left=obBar,           // ТОЧНАЯ привязка к OB-свече
+             top=obTop,
+             right=bar_index + 50, // продлеваем в будущее
+             bottom=obBottom,
+             border_color=color.new(color.green, 50),
+             bgcolor=bullOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.green,
+             text_size=size.tiny
+         )
+
+        // Сохраняем в массив активных OB
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, true))
+
+// При SELL BOS создаём Bearish OB
+if sellBOS and showOrderBlocks
+    [obBar, obTop, obBottom] = findLastOppositeCandle(20, false)
+
+    if not na(obBar)
+        // Создаём коробку СТРОГО от той свечи, которая сформировала OB
+        newBox = box.new(
+             left=obBar,           // ТОЧНАЯ привязка к OB-свече
+             top=obTop,
+             right=bar_index + 50,
+             bottom=obBottom,
+             border_color=color.new(color.red, 50),
+             bgcolor=bearOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.red,
+             text_size=size.tiny
+         )
+
+        // Сохраняем в массив активных OB
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, false))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MITIGATION: УДАЛЕНИЕ ОТРАБОТАННЫХ ORDER BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if enableMitigation and array.size(activeOBs) > 0
+    // Проходим по всем активным OB в обратном порядке
+    for i = array.size(activeOBs) - 1 to 0
+        ob = array.get(activeOBs, i)
+
+        // Условия полного пробития (Mitigation):
+        // Для Bullish OB: цена закрывается ниже нижней границы
+        // Для Bearish OB: цена закрывается выше верхней границы
+        isMitigated = false
+
+        if ob.isBullish
+            // Bullish OB пробит, если close ниже bottom
+            if close < ob.bottom
+                isMitigated := true
+        else
+            // Bearish OB пробит, если close выше top
+            if close > ob.top
+                isMitigated := true
+
+        // Удаляем отработанный OB
+        if isMitigated
+            box.delete(ob.boxObj)
+            array.remove(activeOBs, i)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ВИЗУАЛИЗАЦИЯ BOS МЕТОК (СТРОГАЯ ПРИВЯЗКА К СВЕЧАМ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showBOSLabels and buyBOS
+    // Метка СТРОГО над свечой пробоя
+    label.new(
+         bar_index,
+         high,  // привязка к high свечи
+         "BOS",
+         color=color.new(color.green, 0),
+         style=label.style_label_down,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.abovebar  // над баром
+     )
+
+if showBOSLabels and sellBOS
+    // Метка СТРОГО под свечой пробоя
+    label.new(
+         bar_index,
+         low,  // привязка к low свечи
+         "BOS",
+         color=color.new(color.red, 0),
+         style=label.style_label_up,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.belowbar  // под баром
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ОПЦИОНАЛЬНАЯ ВИЗУАЛИЗАЦИЯ ПИВОТОВ (ДЛЯ ОТЛАДКИ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showPivots = input.bool(false, "Показать Pivot High/Low", group="Debug")
+
+plotshape(
+     showPivots and not na(pivotHigh) ? pivotHigh : na,
+     title="Pivot High",
+     style=shape.diamond,
+     location=location.abovebar,
+     color=color.new(color.red, 0),
+     size=size.tiny
+ )
+
+plotshape(
+     showPivots and not na(pivotLow) ? pivotLow : na,
+     title="Pivot Low",
+     style=shape.diamond,
+     location=location.belowbar,
+     color=color.new(color.green, 0),
+     size=size.tiny
+ )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEBUG ИНФОРМАЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showDebugTable = input.bool(false, "Показать Debug таблицу", group="Debug")
+
+if showDebugTable
+    var table debugTable = table.new(position.top_right, 2, 4, border_width=1)
+
+    if barstate.islast
+        table.cell(debugTable, 0, 0, "Активных OB:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 0, str.tostring(array.size(activeOBs)), text_color=color.yellow, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 1, "Текущее тело:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 1, str.tostring(candleBody, "#.#####"), text_color=color.white, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 2, "Среднее тело:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 2, str.tostring(avgBody, "#.#####"), text_color=color.white, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 3, "Displacement:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 3, isImpulseCandle ? "✓ ДА" : "✗ НЕТ",
+             text_color=isImpulseCandle ? color.lime : color.gray,
+             bgcolor=color.new(color.gray, 70))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// КОНЕЦ СКРИПТА
+// ═══════════════════════════════════════════════════════════════════════════════
