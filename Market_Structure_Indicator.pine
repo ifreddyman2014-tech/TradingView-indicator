@@ -1,0 +1,327 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Claude AI - Market Structure Indicator (No Repaint)
+
+//@version=5
+indicator("Market Structure - Clean & Objective", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HOW IT WORKS
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. CONFIRMED PIVOTS: Uses ta.pivothigh/low with left+right bars confirmation (NO REPAINT)
+// 2. SWING CLASSIFICATION:
+//    - HH (Higher High): New swing high > previous swing high
+//    - LH (Lower High): New swing high < previous swing high
+//    - HL (Higher Low): New swing low > previous swing low
+//    - LL (Lower Low): New swing low < previous swing low
+// 3. NOISE FILTER: Ignores pivots too close to previous (by pips or ATR)
+// 4. BOS/CHoCH: Break of Structure when close > lastSwingHigh or < lastSwingLow (with buffer)
+// 5. TREND STATE: Bullish after BOS up, Bearish after BOS down
+// 6. VISUALIZATION: Labels (HH/HL/LH/LL), Structure lines (ZigZag or Separate), BOS markers
+// 7. MEMORY MANAGEMENT: Limited max labels/lines, auto-deletion of old objects
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS / SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// --- Swing Detection ---
+swingLen = input.int(5, "Pivot Length (Left = Right)", minval=1, maxval=50, group="Swing Detection", tooltip="Bars left and right for pivot confirmation")
+
+// --- Filters ---
+useMinDistance = input.bool(true, "Use Minimum Swing Distance Filter", group="Filters")
+minSwingPips = input.float(5.0, "Min Swing Distance (pips)", minval=0, step=0.5, group="Filters")
+useATRFilter = input.bool(false, "Use ATR Filter Instead", group="Filters")
+atrLength = input.int(14, "ATR Length", minval=1, group="Filters")
+minATRMult = input.float(0.5, "Min ATR Multiplier", minval=0, step=0.1, group="Filters")
+
+// --- BOS/CHoCH ---
+showBOS = input.bool(true, "Show BOS (Break of Structure)", group="BOS/CHoCH")
+showCHoCH = input.bool(true, "Show CHoCH (Change of Character)", group="BOS/CHoCH")
+bosBufferPips = input.float(2.0, "BOS Buffer (pips)", minval=0, step=0.5, group="BOS/CHoCH", tooltip="Buffer to avoid 1-2 pip false breaks")
+
+// --- Visualization ---
+showSwingLabels = input.bool(true, "Show Swing Labels (HH/HL/LH/LL)", group="Visualization")
+showStructureLines = input.bool(true, "Show Structure Lines", group="Visualization")
+lineMode = input.string("ZigZag", "Line Mode", options=["ZigZag", "Separate High/Low"], group="Visualization")
+showLastSwingLevels = input.bool(true, "Show Last Swing Levels (Horizontal)", group="Visualization")
+
+bullishColor = input.color(color.new(color.green, 20), "Bullish Swing Color", group="Visualization")
+bearishColor = input.color(color.new(color.red, 20), "Bearish Swing Color", group="Visualization")
+bosColorUp = input.color(color.new(color.aqua, 0), "BOS Up Color", group="Visualization")
+bosColorDown = input.color(color.new(color.fuchsia, 0), "BOS Down Color", group="Visualization")
+
+maxMarks = input.int(50, "Max Swing Marks to Keep", minval=5, maxval=100, group="Visualization")
+
+// --- Debug ---
+debugMode = input.bool(false, "Debug Mode (Show Internal State)", group="Debug")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Calculate pip value
+f_pip_size() =>
+    float pipSize = syminfo.mintick
+    // For 5-decimal pairs (most forex)
+    if syminfo.type == "forex" and str.tonumber(str.tostring(syminfo.mintick)) < 0.0001
+        pipSize := syminfo.mintick * 10
+    pipSize
+
+f_pips_to_price(pips) =>
+    pips * f_pip_size()
+
+// Check minimum distance filter
+f_passes_filter(newPrice, prevPrice) =>
+    if not useMinDistance
+        true
+    else
+        float minDist = useATRFilter ? ta.atr(atrLength) * minATRMult : f_pips_to_price(minSwingPips)
+        math.abs(newPrice - prevPrice) >= minDist
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PIVOT DETECTION (CONFIRMED, NO REPAINT)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pivotHigh = ta.pivothigh(high, swingLen, swingLen)
+pivotLow = ta.pivotlow(low, swingLen, swingLen)
+
+// Track last confirmed swing points
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+
+// Track previous swing for classification (need 2 swings to classify)
+var float prevSwingHigh = na
+var float prevSwingLow = na
+
+// Current swing type
+var string currentHighType = na  // "HH" or "LH"
+var string currentLowType = na   // "HL" or "LL"
+
+// Arrays for visualization
+var array<label> swingLabels = array.new<label>()
+var array<line> structureLines = array.new<line>()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SWING CLASSIFICATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Process new pivot high
+if not na(pivotHigh)
+    // Get actual bar index of the pivot (swingLen bars ago)
+    pivotBar = bar_index - swingLen
+    pivotPrice = pivotHigh
+
+    // Check minimum distance filter
+    passFilter = na(lastSwingHigh) or f_passes_filter(pivotPrice, lastSwingHigh)
+
+    if passFilter
+        // Classify swing type
+        string swingType = na
+        if not na(prevSwingHigh)
+            swingType := pivotPrice > prevSwingHigh ? "HH" : "LH"
+
+        // Update history
+        prevSwingHigh := lastSwingHigh
+        lastSwingHigh := pivotPrice
+        lastSwingHighBar := pivotBar
+        currentHighType := swingType
+
+        // Create label
+        if showSwingLabels and not na(swingType)
+            labelColor = swingType == "HH" ? bullishColor : bearishColor
+            lbl = label.new(pivotBar, pivotPrice, swingType, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.small)
+            array.push(swingLabels, lbl)
+
+            // Limit labels
+            if array.size(swingLabels) > maxMarks
+                oldLabel = array.shift(swingLabels)
+                label.delete(oldLabel)
+
+// Process new pivot low
+if not na(pivotLow)
+    // Get actual bar index of the pivot (swingLen bars ago)
+    pivotBar = bar_index - swingLen
+    pivotPrice = pivotLow
+
+    // Check minimum distance filter
+    passFilter = na(lastSwingLow) or f_passes_filter(pivotPrice, lastSwingLow)
+
+    if passFilter
+        // Classify swing type
+        string swingType = na
+        if not na(prevSwingLow)
+            swingType := pivotPrice > prevSwingLow ? "HL" : "LL"
+
+        // Update history
+        prevSwingLow := lastSwingLow
+        lastSwingLow := pivotPrice
+        lastSwingLowBar := pivotBar
+        currentLowType := swingType
+
+        // Create label
+        if showSwingLabels and not na(swingType)
+            labelColor = swingType == "HL" ? bullishColor : bearishColor
+            lbl = label.new(pivotBar, pivotPrice, swingType, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.small)
+            array.push(swingLabels, lbl)
+
+            // Limit labels
+            if array.size(swingLabels) > maxMarks
+                oldLabel = array.shift(swingLabels)
+                label.delete(oldLabel)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURE LINES (ZigZag or Separate)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line lastHighLine = na
+var line lastLowLine = na
+var line lastZigZagLine = na
+var int lastZigZagBar = na
+var float lastZigZagPrice = na
+var bool lastZigZagWasHigh = na
+
+if showStructureLines
+    if lineMode == "ZigZag"
+        // ZigZag mode: connect high-low-high-low
+        if not na(pivotHigh)
+            pivotBar = bar_index - swingLen
+            pivotPrice = pivotHigh
+
+            // Draw line from last zigzag point to this high
+            if not na(lastZigZagBar) and not na(lastZigZagPrice)
+                lineColor = pivotPrice > lastZigZagPrice ? bullishColor : bearishColor
+                newLine = line.new(lastZigZagBar, lastZigZagPrice, pivotBar, pivotPrice, color=lineColor, width=2)
+                array.push(structureLines, newLine)
+
+                // Limit lines
+                if array.size(structureLines) > maxMarks
+                    oldLine = array.shift(structureLines)
+                    line.delete(oldLine)
+
+            lastZigZagBar := pivotBar
+            lastZigZagPrice := pivotPrice
+            lastZigZagWasHigh := true
+
+        if not na(pivotLow)
+            pivotBar = bar_index - swingLen
+            pivotPrice = pivotLow
+
+            // Draw line from last zigzag point to this low
+            if not na(lastZigZagBar) and not na(lastZigZagPrice)
+                lineColor = pivotPrice < lastZigZagPrice ? bearishColor : bullishColor
+                newLine = line.new(lastZigZagBar, lastZigZagPrice, pivotBar, pivotPrice, color=lineColor, width=2)
+                array.push(structureLines, newLine)
+
+                // Limit lines
+                if array.size(structureLines) > maxMarks
+                    oldLine = array.shift(structureLines)
+                    line.delete(oldLine)
+
+            lastZigZagBar := pivotBar
+            lastZigZagPrice := pivotPrice
+            lastZigZagWasHigh := false
+
+    else  // Separate High/Low mode
+        // Connect highs to highs
+        if not na(pivotHigh) and not na(prevSwingHigh)
+            pivotBar = bar_index - swingLen
+            prevHighBar = lastSwingHighBar[swingLen]
+
+            if not na(prevHighBar)
+                lineColor = pivotHigh > prevSwingHigh ? bullishColor : bearishColor
+                newLine = line.new(prevHighBar, prevSwingHigh, pivotBar, pivotHigh, color=lineColor, width=2, style=line.style_dashed)
+                array.push(structureLines, newLine)
+
+                if array.size(structureLines) > maxMarks
+                    oldLine = array.shift(structureLines)
+                    line.delete(oldLine)
+
+        // Connect lows to lows
+        if not na(pivotLow) and not na(prevSwingLow)
+            pivotBar = bar_index - swingLen
+            prevLowBar = lastSwingLowBar[swingLen]
+
+            if not na(prevLowBar)
+                lineColor = pivotLow > prevSwingLow ? bullishColor : bearishColor
+                newLine = line.new(prevLowBar, prevSwingLow, pivotBar, pivotLow, color=lineColor, width=2, style=line.style_dashed)
+                array.push(structureLines, newLine)
+
+                if array.size(structureLines) > maxMarks
+                    oldLine = array.shift(structureLines)
+                    line.delete(oldLine)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BOS / CHoCH DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var string trendState = "neutral"  // "bullish", "bearish", "neutral"
+var line lastSwingHighLevel = na
+var line lastSwingLowLevel = na
+
+bosBuffer = f_pips_to_price(bosBufferPips)
+
+// BOS Up: close > lastSwingHigh + buffer
+bosUp = showBOS and not na(lastSwingHigh) and close > (lastSwingHigh + bosBuffer)
+bosUpIsChoch = bosUp and trendState == "bearish"
+
+// BOS Down: close < lastSwingLow - buffer
+bosDown = showBOS and not na(lastSwingLow) and close < (lastSwingLow - bosBuffer)
+bosDownIsChoch = bosDown and trendState == "bullish"
+
+// Update trend state
+if bosUp
+    trendState := "bullish"
+if bosDown
+    trendState := "bearish"
+
+// Plot BOS signals
+plotshape(showBOS and bosUp and not bosUpIsChoch, "BOS ↑", shape.triangleup, location.belowbar, bosColorUp, size=size.small, text="BOS")
+plotshape(showCHoCH and bosUpIsChoch, "CHoCH ↑", shape.triangleup, location.belowbar, color.new(bosColorUp, 30), size=size.normal, text="CHoCH")
+
+plotshape(showBOS and bosDown and not bosDownIsChoch, "BOS ↓", shape.triangledown, location.abovebar, bosColorDown, size=size.small, text="BOS")
+plotshape(showCHoCH and bosDownIsChoch, "CHoCH ↓", shape.triangledown, location.abovebar, color.new(bosColorDown, 30), size=size.normal, text="CHoCH")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LAST SWING LEVELS (Horizontal Lines)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showLastSwingLevels
+    // Delete old levels
+    if not na(lastSwingHighLevel)
+        line.delete(lastSwingHighLevel)
+    if not na(lastSwingLowLevel)
+        line.delete(lastSwingLowLevel)
+
+    // Draw new levels
+    if not na(lastSwingHigh)
+        lastSwingHighLevel := line.new(bar_index - 50, lastSwingHigh, bar_index + 10, lastSwingHigh, color=color.new(bullishColor, 50), width=1, style=line.style_dotted)
+
+    if not na(lastSwingLow)
+        lastSwingLowLevel := line.new(bar_index - 50, lastSwingLow, bar_index + 10, lastSwingLow, color=color.new(bearishColor, 50), width=1, style=line.style_dotted)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEBUG MODE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if debugMode
+    var label debugLabel = na
+    if not na(debugLabel)
+        label.delete(debugLabel)
+
+    debugText = "Trend: " + trendState + "\n" + "Last High: " + str.tostring(lastSwingHigh, format.mintick) + "\n" + "Last Low: " + str.tostring(lastSwingLow, format.mintick) + "\n" + "High Type: " + (na(currentHighType) ? "N/A" : currentHighType) + "\n" + "Low Type: " + (na(currentLowType) ? "N/A" : currentLowType)
+
+    debugLabel := label.new(bar_index, high, debugText, style=label.style_label_down, color=color.new(color.gray, 70), textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(not na(currentHighType) and currentHighType == "HH", "Higher High", "New Higher High detected")
+alertcondition(not na(currentHighType) and currentHighType == "LH", "Lower High", "New Lower High detected")
+alertcondition(not na(currentLowType) and currentLowType == "HL", "Higher Low", "New Higher Low detected")
+alertcondition(not na(currentLowType) and currentLowType == "LL", "Lower Low", "New Lower Low detected")
+alertcondition(bosUp and not bosUpIsChoch, "BOS Up", "Break of Structure UP")
+alertcondition(bosDown and not bosDownIsChoch, "BOS Down", "Break of Structure DOWN")
+alertcondition(bosUpIsChoch, "CHoCH Up", "Change of Character UP (trend reversal)")
+alertcondition(bosDownIsChoch, "CHoCH Down", "Change of Character DOWN (trend reversal)")
