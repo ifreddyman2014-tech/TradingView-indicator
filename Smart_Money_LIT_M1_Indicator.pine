@@ -1,0 +1,223 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Claude AI - Smart Money / LIT Strategy Indicator
+
+//@version=5
+indicator("Smart Money / LIT - M1 Structure & OB", overlay=true, max_boxes_count=50, max_labels_count=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ / INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// 1. СВИНГИ (Pivots)
+pivotLength = input.int(5, "Pivot Length (свечей слева/справа)", minval=2, maxval=20,
+     tooltip="Количество свечей для подтверждения локального максимума/минимума")
+
+// 2. DISPLACEMENT (Импульс)
+displacementFactor = input.float(1.5, "Displacement Factor (коэффициент импульса)", minval=1.0, maxval=5.0, step=0.1,
+     tooltip="Тело свечи должно быть больше среднего тела последних 10 свечей × этот коэффициент")
+avgBodyPeriod = input.int(10, "Средний период для расчёта тела свечи", minval=5, maxval=50)
+
+// 3. ВИЗУАЛИЗАЦИЯ
+showBOS = input.bool(true, "Показать BOS Labels", group="Визуализация")
+showOB = input.bool(true, "Показать Order Blocks", group="Визуализация")
+
+bullishOBColor = input.color(color.new(color.blue, 80), "Цвет Bullish OB", group="Визуализация")
+bearishOBColor = input.color(color.new(color.red, 80), "Цвет Bearish OB", group="Визуализация")
+
+bosLabelSize = input.string("small", "Размер BOS Label", options=["tiny", "small", "normal"], group="Визуализация")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ФУНКЦИИ / LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Расчёт тела свечи
+candleBody = math.abs(close - open)
+
+// Средний размер тела за последние N свечей
+avgBody = ta.sma(candleBody, avgBodyPeriod)
+
+// Проверка на DISPLACEMENT (импульсная свеча)
+isDisplacement = candleBody > (avgBody * displacementFactor)
+
+// Определение направления свечи
+isBullishCandle = close > open
+isBearishCandle = close < open
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. ОПРЕДЕЛЕНИЕ СВИНГОВ (PIVOTS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Подтверждённые пивоты (они появляются с задержкой = pivotLength)
+pivotHigh = ta.pivothigh(high, pivotLength, pivotLength)
+pivotLow = ta.pivotlow(low, pivotLength, pivotLength)
+
+// Переменные для хранения последнего подтверждённого пивота
+var float lastPivotHigh = na
+var int lastPivotHighBar = na
+
+var float lastPivotLow = na
+var int lastPivotLowBar = na
+
+// Обновляем пивоты
+if not na(pivotHigh)
+    lastPivotHigh := pivotHigh
+    lastPivotHighBar := bar_index - pivotLength
+
+if not na(pivotLow)
+    lastPivotLow := pivotLow
+    lastPivotLowBar := bar_index - pivotLength
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2 & 3. STRICT BOS С DISPLACEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// BUY BOS: Close пробивает последний Pivot High + есть displacement
+buyBOS = not na(lastPivotHigh) and close > lastPivotHigh and isDisplacement and isBullishCandle
+
+// SELL BOS: Close пробивает последний Pivot Low + есть displacement
+sellBOS = not na(lastPivotLow) and close < lastPivotLow and isDisplacement and isBearishCandle
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. ПОИСК ORDER BLOCK (OB)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Для BUY BOS: ищем последнюю медвежью свечу перед импульсом вверх
+var int bullishOBBar = na
+var float bullishOBTop = na
+var float bullishOBBottom = na
+
+if buyBOS
+    // Ищем последнюю медвежью свечу перед текущим баром
+    for i = 1 to 20
+        if close[i] < open[i]  // медвежья свеча
+            bullishOBBar := bar_index - i
+            // Тело свечи (не фитили!)
+            bullishOBTop := open[i]       // верх тела медвежьей свечи
+            bullishOBBottom := close[i]   // низ тела медвежьей свечи
+            break
+
+// Для SELL BOS: ищем последнюю бычью свечу перед импульсом вниз
+var int bearishOBBar = na
+var float bearishOBTop = na
+var float bearishOBBottom = na
+
+if sellBOS
+    // Ищем последнюю бычью свечу перед текущим баром
+    for i = 1 to 20
+        if close[i] > open[i]  // бычья свеча
+            bearishOBBar := bar_index - i
+            // Тело свечи (не фитили!)
+            bearishOBTop := close[i]      // верх тела бычьей свечи
+            bearishOBBottom := open[i]    // низ тела бычьей свечи
+            break
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. ВИЗУАЛИЗАЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// --- BOS LABELS ---
+if showBOS and buyBOS
+    label.new(
+         bar_index,
+         low,
+         "BOS ↑",
+         color=color.new(color.blue, 0),
+         style=label.style_label_up,
+         textcolor=color.white,
+         size=bosLabelSize == "tiny" ? size.tiny : bosLabelSize == "small" ? size.small : size.normal
+     )
+
+if showBOS and sellBOS
+    label.new(
+         bar_index,
+         high,
+         "BOS ↓",
+         color=color.new(color.red, 0),
+         style=label.style_label_down,
+         textcolor=color.white,
+         size=bosLabelSize == "tiny" ? size.tiny : bosLabelSize == "small" ? size.small : size.normal
+     )
+
+// --- ORDER BLOCKS (BOXES) ---
+
+// Bullish OB (для BUY)
+if showOB and buyBOS and not na(bullishOBBar)
+    box.new(
+         left=bullishOBBar,
+         top=bullishOBTop,
+         right=bar_index + 50,  // продляем вправо
+         bottom=bullishOBBottom,
+         border_color=color.new(color.blue, 50),
+         bgcolor=bullishOBColor,
+         border_width=1,
+         extend=extend.right,
+         text="OB",
+         text_color=color.blue,
+         text_size=size.small
+     )
+
+// Bearish OB (для SELL)
+if showOB and sellBOS and not na(bearishOBBar)
+    box.new(
+         left=bearishOBBar,
+         top=bearishOBTop,
+         right=bar_index + 50,  // продляем вправо
+         bottom=bearishOBBottom,
+         border_color=color.new(color.red, 50),
+         bgcolor=bearishOBColor,
+         border_width=1,
+         extend=extend.right,
+         text="OB",
+         text_color=color.red,
+         text_size=size.small
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ВИЗУАЛИЗАЦИЯ ПИВОТОВ (опционально, для отладки)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showPivots = input.bool(false, "Показать Pivot High/Low", group="Дополнительно")
+
+plotshape(
+     showPivots and not na(pivotHigh) ? pivotHigh : na,
+     title="Pivot High",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=color.new(color.red, 30),
+     size=size.tiny
+ )
+
+plotshape(
+     showPivots and not na(pivotLow) ? pivotLow : na,
+     title="Pivot Low",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=color.new(color.green, 30),
+     size=size.tiny
+ )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ИНФОРМАЦИЯ НА ГРАФИКЕ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Показываем текущий размер тела и средний (для понимания displacement)
+showDebug = input.bool(false, "Debug: показать размер тела свечи", group="Дополнительно")
+
+if showDebug
+    var table debugTable = table.new(position.top_right, 2, 3, border_width=1)
+
+    if barstate.islast
+        table.cell(debugTable, 0, 0, "Текущее тело:", text_color=color.white, bgcolor=color.new(color.gray, 50))
+        table.cell(debugTable, 1, 0, str.tostring(candleBody, "#.#####"), text_color=color.yellow, bgcolor=color.new(color.gray, 50))
+
+        table.cell(debugTable, 0, 1, "Среднее тело:", text_color=color.white, bgcolor=color.new(color.gray, 50))
+        table.cell(debugTable, 1, 1, str.tostring(avgBody, "#.#####"), text_color=color.white, bgcolor=color.new(color.gray, 50))
+
+        table.cell(debugTable, 0, 2, "Displacement?:", text_color=color.white, bgcolor=color.new(color.gray, 50))
+        table.cell(debugTable, 1, 2, isDisplacement ? "✓ ДА" : "✗ НЕТ",
+             text_color=isDisplacement ? color.lime : color.red,
+             bgcolor=color.new(color.gray, 50))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// КОНЕЦ СКРИПТА
+// ═══════════════════════════════════════════════════════════════════════════════
