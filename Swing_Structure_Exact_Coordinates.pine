@@ -1,0 +1,368 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Claude AI - Swing Structure (Exact Price Coordinates)
+
+//@version=5
+indicator("Swing Structure - Exact Coordinates", overlay=true, max_boxes_count=50, max_labels_count=200, max_lines_count=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ / SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Свинги (Pivots)
+pivotLength = input.int(5, "Pivot Length", minval=2, maxval=20,
+     tooltip="Количество свечей для подтверждения swing high/low")
+
+// Displacement (опционально)
+useDisplacement = input.bool(true, "Требовать Displacement для BOS", group="Фильтры")
+displacementFactor = input.float(1.5, "Displacement Factor", minval=1.0, maxval=5.0, step=0.1, group="Фильтры")
+avgBodyPeriod = input.int(10, "Период для среднего тела", minval=5, maxval=50, group="Фильтры")
+
+// Order Blocks
+showOB = input.bool(true, "Показать Order Blocks", group="Order Blocks")
+bullOBColor = input.color(color.new(color.blue, 85), "Цвет Bullish OB", group="Order Blocks")
+bearOBColor = input.color(color.new(color.red, 85), "Цвет Bearish OB", group="Order Blocks")
+
+// Визуализация
+showPivotLabels = input.bool(true, "Показать метки H/L на свингах", group="Визуализация")
+showBOSLines = input.bool(true, "Показать BOS линии", group="Визуализация")
+bosLineStyle = input.string("Dashed", "Стиль BOS линии", options=["Solid", "Dashed", "Dotted"], group="Визуализация")
+
+// Mitigation
+enableMitigation = input.bool(true, "Удалять отработанные OB", group="Mitigation")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ВСПОМОГАТЕЛЬНЫЕ РАСЧЁТЫ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Displacement
+candleBody = math.abs(close - open)
+avgBody = ta.sma(candleBody, avgBodyPeriod)
+isImpulseCandle = candleBody > (avgBody * displacementFactor)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. SWING STRUCTURE: ОПРЕДЕЛЕНИЕ PIVOT POINTS (С ПРАВИЛЬНЫМ OFFSET)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Подтверждённые пивоты (появляются с задержкой = pivotLength)
+pivotHighValue = ta.pivothigh(high, pivotLength, pivotLength)
+pivotLowValue = ta.pivotlow(low, pivotLength, pivotLength)
+
+// Хранение последних подтверждённых уровней
+var float lastPivotHigh = na
+var int lastPivotHighBar = na
+
+var float lastPivotLow = na
+var int lastPivotLowBar = na
+
+// Флаги текущей структуры
+var bool bullishStructure = false
+var bool bearishStructure = false
+
+// Обновление пивотов с ПРАВИЛЬНЫМ OFFSET
+bool newPivotHigh = not na(pivotHighValue)
+bool newPivotLow = not na(pivotLowValue)
+
+if newPivotHigh
+    // КРИТИЧЕСКИ ВАЖНО: Pivot сформировался pivotLength баров назад!
+    lastPivotHigh := pivotHighValue  // это и есть high[pivotLength]
+    lastPivotHighBar := bar_index - pivotLength  // ПРАВИЛЬНЫЙ bar_index
+
+    if bullishStructure
+        bullishStructure := false
+
+if newPivotLow
+    // КРИТИЧЕСКИ ВАЖНО: Pivot сформировался pivotLength баров назад!
+    lastPivotLow := pivotLowValue  // это и есть low[pivotLength]
+    lastPivotLowBar := bar_index - pivotLength  // ПРАВИЛЬНЫЙ bar_index
+
+    if bearishStructure
+        bearishStructure := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2. ВИЗУАЛИЗАЦИЯ SWING HIGHS/LOWS (ТОЧНАЯ ПРИВЯЗКА К ЦЕНЕ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showPivotLabels and newPivotHigh
+    // Метка СТРОГО на уровне High свечи (кончик верхнего фитиля)
+    label.new(
+         x=lastPivotHighBar,           // ПРАВИЛЬНЫЙ bar (не текущий!)
+         y=lastPivotHigh,              // ТОЧНАЯ цена High
+         text="H",
+         color=color.new(color.red, 100),  // прозрачный фон
+         style=label.style_none,
+         textcolor=color.red,
+         size=size.tiny,
+         yloc=yloc.price,              // ← КЛЮЧЕВОЕ: привязка к цене, не к бару
+         textalign=text.align_center
+     )
+
+if showPivotLabels and newPivotLow
+    // Метка СТРОГО на уровне Low свечи (кончик нижнего фитиля)
+    label.new(
+         x=lastPivotLowBar,            // ПРАВИЛЬНЫЙ bar (не текущий!)
+         y=lastPivotLow,               // ТОЧНАЯ цена Low
+         text="L",
+         color=color.new(color.green, 100),  // прозрачный фон
+         style=label.style_none,
+         textcolor=color.green,
+         size=size.tiny,
+         yloc=yloc.price,              // ← КЛЮЧЕВОЕ: привязка к цене
+         textalign=text.align_center
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3. STRICT BOS LOGIC (SWING STRUCTURE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Условия для BOS
+bool buyBOSCondition = not na(lastPivotHigh) and
+     close > lastPivotHigh and
+     (not useDisplacement or isImpulseCandle) and
+     not bullishStructure
+
+bool sellBOSCondition = not na(lastPivotLow) and
+     close < lastPivotLow and
+     (not useDisplacement or isImpulseCandle) and
+     not bearishStructure
+
+// Переменные для хранения данных BOS
+var float bosLevel = na
+var int bosBar = na
+var bool isBullishBOS = na
+
+// BUY BOS: пробой вверх
+if buyBOSCondition
+    bullishStructure := true
+    bearishStructure := false
+    bosLevel := lastPivotHigh
+    bosBar := lastPivotHighBar
+    isBullishBOS := true
+
+// SELL BOS: пробой вниз
+if sellBOSCondition
+    bearishStructure := true
+    bullishStructure := false
+    bosLevel := lastPivotLow
+    bosBar := lastPivotLowBar
+    isBullishBOS := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. ВИЗУАЛИЗАЦИЯ BOS (СТРОГО ГОРИЗОНТАЛЬНЫЕ ЛИНИИ НА ТОЧНОМ УРОВНЕ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Определяем стиль линии
+lineStyleValue = bosLineStyle == "Solid" ? line.style_solid :
+     bosLineStyle == "Dashed" ? line.style_dashed :
+     line.style_dotted
+
+if showBOSLines and buyBOSCondition
+    // СТРОГО ГОРИЗОНТАЛЬНАЯ линия на уровне Pivot High
+    bosLine = line.new(
+         x1=bosBar,                    // от Pivot бара
+         y1=bosLevel,                  // ТОЧНЫЙ уровень High
+         x2=bar_index,                 // до свечи пробоя
+         y2=bosLevel,                  // та же высота (горизонтальная!)
+         color=color.new(color.blue, 0),
+         width=1,
+         style=lineStyleValue
+     )
+
+    // Метка "BOS" СТРОГО на этой же высоте
+    label.new(
+         x=bar_index,
+         y=bosLevel,                   // та же цена, что и линия
+         text="BOS ↑",
+         color=color.new(color.blue, 20),
+         style=label.style_label_left,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.price               // привязка к цене
+     )
+
+if showBOSLines and sellBOSCondition
+    // СТРОГО ГОРИЗОНТАЛЬНАЯ линия на уровне Pivot Low
+    bosLine = line.new(
+         x1=bosBar,                    // от Pivot бара
+         y1=bosLevel,                  // ТОЧНЫЙ уровень Low
+         x2=bar_index,                 // до свечи пробоя
+         y2=bosLevel,                  // та же высота (горизонтальная!)
+         color=color.new(color.red, 0),
+         width=1,
+         style=lineStyleValue
+     )
+
+    // Метка "BOS" СТРОГО на этой же высоте
+    label.new(
+         x=bar_index,
+         y=bosLevel,                   // та же цена, что и линия
+         text="BOS ↓",
+         color=color.new(color.red, 20),
+         style=label.style_label_left,
+         textcolor=color.white,
+         size=size.tiny,
+         yloc=yloc.price               // привязка к цене
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. ORDER BLOCKS (СТРОГАЯ ПРИВЯЗКА ПО ТЕЛУ СВЕЧИ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Типы для хранения OB
+type OrderBlock
+    box boxObj
+    float top
+    float bottom
+    bool isBullish
+
+var array<OrderBlock> activeOBs = array.new<OrderBlock>()
+
+// Функция поиска OB свечи с ТОЧНЫМИ координатами
+findOBCandleExact(lookback, searchBearish) =>
+    var int foundBar = na
+    var float foundTop = na
+    var float foundBottom = na
+
+    for i = 1 to lookback
+        if searchBearish and close[i] < open[i]  // медвежья свеча для BUY BOS
+            foundBar := bar_index - i
+            // ТОЧНОЕ ТЕЛО свечи (без фитилей!)
+            foundTop := math.max(open[i], close[i])      // верх тела
+            foundBottom := math.min(open[i], close[i])   // низ тела
+            break
+        if not searchBearish and close[i] > open[i]  // бычья свеча для SELL BOS
+            foundBar := bar_index - i
+            // ТОЧНОЕ ТЕЛО свечи (без фитилей!)
+            foundTop := math.max(open[i], close[i])      // верх тела
+            foundBottom := math.min(open[i], close[i])   // низ тела
+            break
+
+    [foundBar, foundTop, foundBottom]
+
+// Рисуем OB при BUY BOS (строго по ТЕЛУ)
+if showOB and buyBOSCondition
+    [obBar, obTop, obBottom] = findOBCandleExact(20, true)
+
+    if not na(obBar)
+        // Коробка СТРОГО по координатам тела свечи (инженерная точность!)
+        newBox = box.new(
+             left=obBar,                     // точный bar_index OB-свечи
+             top=obTop,                      // точная верхняя граница тела
+             right=bar_index + 50,
+             bottom=obBottom,                // точная нижняя граница тела
+             border_color=color.new(color.blue, 50),
+             bgcolor=bullOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.blue,
+             text_size=size.tiny
+         )
+
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, true))
+
+// Рисуем OB при SELL BOS (строго по ТЕЛУ)
+if showOB and sellBOSCondition
+    [obBar, obTop, obBottom] = findOBCandleExact(20, false)
+
+    if not na(obBar)
+        // Коробка СТРОГО по координатам тела свечи (инженерная точность!)
+        newBox = box.new(
+             left=obBar,                     // точный bar_index OB-свечи
+             top=obTop,                      // точная верхняя граница тела
+             right=bar_index + 50,
+             bottom=obBottom,                // точная нижняя граница тела
+             border_color=color.new(color.red, 50),
+             bgcolor=bearOBColor,
+             border_width=1,
+             extend=extend.right,
+             text="OB",
+             text_color=color.red,
+             text_size=size.tiny
+         )
+
+        array.push(activeOBs, OrderBlock.new(newBox, obTop, obBottom, false))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6. MITIGATION: УДАЛЕНИЕ ОТРАБОТАННЫХ OB
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if enableMitigation and array.size(activeOBs) > 0
+    for i = array.size(activeOBs) - 1 to 0
+        ob = array.get(activeOBs, i)
+
+        isMitigated = false
+
+        if ob.isBullish
+            if close < ob.bottom
+                isMitigated := true
+        else
+            if close > ob.top
+                isMitigated := true
+
+        if isMitigated
+            box.delete(ob.boxObj)
+            array.remove(activeOBs, i)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEBUG ИНФОРМАЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showDebug = input.bool(false, "Показать Debug таблицу", group="Debug")
+
+if showDebug
+    var table debugTable = table.new(position.top_right, 2, 6, border_width=1)
+
+    if barstate.islast
+        table.cell(debugTable, 0, 0, "Структура:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 0,
+             bullishStructure ? "🟢 BULLISH" : bearishStructure ? "🔴 BEARISH" : "⚪ NEUTRAL",
+             text_color=bullishStructure ? color.lime : bearishStructure ? color.red : color.gray,
+             bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 1, "Last Pivot High:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 1, str.tostring(lastPivotHigh, "#.#####"), text_color=color.red, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 2, "Pivot High Bar:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 2, str.tostring(lastPivotHighBar), text_color=color.red, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 3, "Last Pivot Low:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 3, str.tostring(lastPivotLow, "#.#####"), text_color=color.green, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 4, "Pivot Low Bar:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 4, str.tostring(lastPivotLowBar), text_color=color.green, bgcolor=color.new(color.gray, 70))
+
+        table.cell(debugTable, 0, 5, "Активных OB:", text_color=color.white, bgcolor=color.new(color.gray, 70))
+        table.cell(debugTable, 1, 5, str.tostring(array.size(activeOBs)), text_color=color.yellow, bgcolor=color.new(color.gray, 70))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ОПЦИОНАЛЬНАЯ ВИЗУАЛИЗАЦИЯ: ЛИНИИ ОТ ПИВОТОВ (ДЛЯ ПРОВЕРКИ ТОЧНОСТИ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showPivotLines = input.bool(false, "Показать горизонтальные линии от Pivots", group="Debug",
+     tooltip="Для проверки точности привязки. Линия должна идеально лежать на High/Low свечи.")
+
+if showPivotLines and newPivotHigh
+    line.new(
+         x1=lastPivotHighBar,
+         y1=lastPivotHigh,
+         x2=lastPivotHighBar + 10,
+         y2=lastPivotHigh,
+         color=color.new(color.red, 50),
+         width=1,
+         style=line.style_solid
+     )
+
+if showPivotLines and newPivotLow
+    line.new(
+         x1=lastPivotLowBar,
+         y1=lastPivotLow,
+         x2=lastPivotLowBar + 10,
+         y2=lastPivotLow,
+         color=color.new(color.green, 50),
+         width=1,
+         style=line.style_solid
+     )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// КОНЕЦ СКРИПТА
+// ═══════════════════════════════════════════════════════════════════════════════
